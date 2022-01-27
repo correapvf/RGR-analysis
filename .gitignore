@@ -1,0 +1,4 @@
+*.csv
+.Rhistory
+analysis_files/
+analysis.html

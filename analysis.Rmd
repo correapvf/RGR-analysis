@@ -1,0 +1,622 @@
+---
+title: "Benthic megafaunal community structure on ferromanganese crusts and adjacent areas on of the Rio Grande Rise, Southwest Atlantic"
+output: 
+  html_document:
+    self_contained: no
+---
+
+# Load packages
+```{r load packages, message=FALSE, warning=FALSE}
+library(vegan)
+library(cluster)
+library(data.table)
+library(ggplot2)
+library(RColorBrewer)
+library(ggdendro)
+library(gridExtra)
+library(indicspecies)
+library(readxl)
+library(ggtext)
+library(multcompView)
+library(mvpart)
+source("functions.R")
+
+save_output <- FALSE # set to TRUE to save plots
+capture.output(sessionInfo(), file = "sessionInfo.txt")
+```
+
+
+
+# Load data
+```{r load data}
+mc <- read.csv('mc.csv')
+envs <- read.csv('envs.csv')
+envs$habitat_code <- factor(envs$habitat_code,
+                            levels = c('RiftDeb', 'RiftSed', 'RiftHole', 'RiftRock',
+                                       'RiftCr', 'Sed', 'CalPav', 'CrSed', 'CrPav', 'Cr', 'CrCob'))
+envs$region <- factor(envs$region, levels = c('Northeast', 'Center', 'South', 'Southwest'))
+```
+
+
+# Cluster analysis
+```{r}
+mc.log <- log1p(mc)
+spe.bc <- vegdist(mc.log)
+dend.bc.UPGMA <- hclust(spe.bc, method = "average")
+```
+
+
+
+### Cophenetic correlation
+Shepard-like diagrams comparing Bray-Curtis distances with cophenetic distances
+of the selected clustering algorithm
+```{r}
+dend.bc.UPGMA.coph <- cophenetic(dend.bc.UPGMA)
+
+plot(spe.bc, dend.bc.UPGMA.coph,
+  xlab = "Bray-Curtis distance", ylab = "Cophenetic distance",
+  asp = 1, xlim = c(0, sqrt(2)), ylim = c(0, sqrt(2)),
+  main = c("Average", paste("Cophenetic correlation =", round(cor(spe.bc, dend.bc.UPGMA.coph), 3)))
+)
+abline(0, 1)
+lines(lowess(spe.bc, dend.bc.UPGMA.coph), col = "red")
+```
+
+
+
+### Fusion levels
+```{r}
+plot(dend.bc.UPGMA$height, nrow(mc):2, type = "S")
+text(dend.bc.UPGMA$height, nrow(mc):2, nrow(mc):2, col = "red", cex = 0.8)
+```
+
+
+### Average Silhouette Widths
+```{r}
+asw <- numeric(nrow(mc))
+for (k in 2:(nrow(mc) - 1)) {
+  sil <- silhouette(cutree(dend.bc.UPGMA, k = k), spe.bc)
+  asw[k] <- summary(sil)$avg.width
+}
+k.best <- which.max(asw)
+
+plot(1:nrow(mc), asw, type = "h",
+     main = "Silhouette-optimal number of clusters",
+     xlab = "k (number of groups)", ylab = "Average silhouette width")
+axis(1, k.best, paste("optimum", k.best, sep = "\n"), col = "red", font = 2,
+     col.axis = "red")
+points(k.best, max(asw), pch = 16, col = "red", cex = 1.5)
+```
+
+
+Here we selected 6 groups as the optimal number of clusters.
+
+
+### Figure 6 - Save the final tree
+```{r}
+k <- 6 # number of clusters
+
+hcdata <- dendro_data_k(dend.bc.UPGMA, k)
+df1 <- as.data.frame(table(hcdata$labels$clust))
+df1$Var1 <- factor(df1$Var1, levels = rev(unique(hcdata$labels$clust)), labels = LETTERS[k:1])
+h <- mean(sort(dend.bc.UPGMA$height, TRUE)[(k - 1):k])
+
+col_vec <- brewer.pal(7, 'Set1')[c(1, 7, 5, 4, 2, 3)]
+col_vec_r <- rev(col_vec)
+```
+
+```{r figure 6 dendogram, message=FALSE}
+g1 <- plot_ggdendro(hcdata, scale.color = c('black', col_vec_r[df1$Var1]),
+                    branch.size = 0.3, expand.y = expansion(mult = c(0, .05))) +
+  geom_hline(yintercept = h, linetype = "dashed", size = 0.2) +
+  theme_artigo() + scale_x_continuous(expand = expansion(mult = c(0.02, 0.02))) +
+  labs(tag = "a") + ylab("Distance") +
+  theme(axis.title.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(), axis.line.x = element_blank())
+
+
+g2 <- ggplot(df1, aes(2, y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.3) +
+  geom_text(aes(x = 1, label = Var1), fontface = "bold", size = 2.3, position = position_stack(vjust = 0.5)) +
+  theme_void() + theme(legend.position = "none", plot.margin = unit(c(-0.5, 0, 0.6, 0), "mm")) +
+  scale_y_continuous(expand = expansion(mult = c(0.15, 0.03))) + scale_fill_manual(values = col_vec_r) +
+  scale_x_continuous(expand = expansion(mult = c(0.5, 0))) + coord_flip()
+
+
+g <- arrangeGrob(g1, g2, nrow = 2, heights = c(9/10, 1/10))
+```
+
+
+### Figure 6 - Box plot of relative abundances
+
+```{r}
+spes <- c("Scle1", "Scep1", "Echi2", "Scep2", "Anti1")
+spes.full <- c("***Enallopsammia<br>rostrata***",
+              "***Sarostegia<br>oculata***",
+              "***Gracilechinus***<br>**sp.**",
+              "***Aphrocallistes***<br>**cf.** ***beatrix***",
+              "***Aphanostichopathes***<br>**sp.**")
+
+mc.rel <- mc / apply(mc, 1, sum)
+sub.mc.rel <- mc.rel[, spes] * 100
+sub.mc.rel$cluster <- envs$cluster
+setDT(sub.mc.rel)
+sub.mc.rel.melt <- melt(sub.mc.rel, id = "cluster")
+sub.mc.rel.melt[, cluster := factor(cluster)]
+sub.mc.rel.melt[, variable := factor(variable, levels = spes, labels = spes.full)]
+```
+
+```{r figure 6 box-plot}
+g3 <- ggplot(sub.mc.rel.melt, aes(x = cluster, y = value, fill = cluster)) +
+  geom_boxplot(position = position_dodge(), lwd = 0.3, outlier.size = 0.5, color = "black", show.legend = FALSE) +
+  scale_fill_manual(values = col_vec) +
+  facet_wrap(~variable, strip.position = c('bottom'), nrow = 1, drop = FALSE) +
+  theme_artigo() + ylab("Relative Abundance (%)") +
+  scale_y_continuous(expand = expansion(c(0.02, 0))) +
+  labs(tag = "b") +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(size = 6),
+        plot.margin = margin(3, 1, 1, 1, unit = "mm"),
+        panel.spacing.x = unit(1, "mm"),
+        strip.placement = 'outside',
+        strip.background = element_rect(fill = NULL, color = 'white', size = 0),
+        strip.text = element_markdown(colour = "black", margin = unit(c(0, 0, 0, 0), "mm"), size = 6),
+        strip.switch.pad.wrap = unit(0, 'mm'))
+```
+
+Arrange both plots
+```{r, fig.height=3.543, fig.width=3.937}
+g2 <- arrangeGrob(g, g3, nrow = 2, heights = c(4.5/10, 5.5/10))
+if (save_output) ggsave("Figure 6.svg", g2, height = 10, width = 9, units = 'cm')
+grid.arrange(g2)
+```
+
+
+Save clusters to *envs* data.frame
+```{r}
+df2 <- data.table(original = rev(unique(hcdata$labels$clust)), new = LETTERS[k:1])
+cluster <- data.table(original = hcdata$labels$original)
+cluster[df2, new := new, on = .(original)]
+
+envs$cluster <- cluster$new
+```
+
+
+### Chi-squared test
+test clusters typology for habitat and region 
+```{r}
+chisq.test(as.factor(envs$cluster), as.factor(envs$habitat_code), simulate.p.value = TRUE, B = 9999)
+```
+
+```{r}
+chisq.test(as.factor(envs$cluster), as.factor(envs$region), simulate.p.value = TRUE, B = 9999)
+```
+
+
+## IndVal
+```{r}
+# get full taxons names
+morphotypes <- read.csv("morphotypes.csv")
+morphotypes_mc <- merge(data.frame(code = colnames(mc)), morphotypes, all = FALSE)
+
+mc_fullnames <- mc
+colnames(mc_fullnames) <- paste0(morphotypes_mc$taxonName, ' (', morphotypes_mc$code, ')')
+
+# generate permutations used in the analysis
+control <- how(within = Within(type = "series",  mirror = TRUE),
+              plots = Plots(strata = envs$station), nperm = 9999)
+
+selected_stations <- which(envs$station == "HY35")
+nr <- nrow(mc)
+
+set.seed(12349)
+perm <- replicate(control$nperm, permute_custom(nr, control, selected_stations))
+```
+
+```{r}
+ival.mult <- multipatt(mc, envs$cluster, func = "indval.g", permutations = perm)
+                        
+summary(ival.mult)
+```
+
+
+
+### Generate data used in figure 7
+```{r figure 7.1}
+results <- matrix("", nrow = 3, ncol = k)
+for (clust in 1:k) {
+  # get IndVal species
+  spps <- apply(ival.mult$sign[, 1:k], 1, sum) == 1 &
+    ival.mult$sign[, clust] == 1 &
+    ival.mult$sign[, "p.value"] < 0.05 &
+    ival.mult$sign[, "stat"] > 0.2
+  x <- ival.mult$sign[spps, ]
+  x <- x[order(-x$stat), ]
+  results[1, clust] <- paste(rownames(x), round(x$stat, 2), collapse = "\n")
+
+  # get regions
+  x <- envs[envs$cluster == LETTERS[clust], ]
+  x2 <- table(x$region) * 100 / nrow(x)
+  x2 <- create_other(x2)
+  results[2, clust] <- paste(names(x2), sprintf("%.1f%%", x2), collapse = "\n")
+
+  # get habitats
+  x2 <- table(x$habitat_code) * 100 / nrow(x)
+  x2 <- create_other(x2)
+  results[3, clust] <- paste(names(x2), sprintf("%.1f%%", x2), collapse = "\n")
+}
+
+if (save_output) write.csv(results, "spe-importance.csv", row.names = FALSE)
+```
+
+plot substrate vs subsystem used in figure 7
+```{r figure 7.2}
+envs$Subsystem <- sapply(strsplit(envs$Subsystem, " "), `[[`, 1)
+g <- ggplot(envs, aes(y = cluster, fill = Substrate, alpha = Subsystem)) +
+  geom_bar(position = position_fill(), color = "black") + theme_void() +
+  scale_alpha_manual(values = c(1, 0.3)) + scale_fill_brewer(palette = "Dark2", direction = -1) +
+  theme(legend.position = "top", axis.text.y = element_text())
+if (save_output) ggsave("figure 7 substrates.svg", g, height = 9, width = 14, units = 'cm')
+```
+
+
+
+## Figure 4 - richness vs distance
+```{r}
+richness <- richness_plot(mc, perm = 999)
+richness_subset <- subset(richness$pool_spp, !(variable %in% c('Chao2', 'Jack2')))
+
+
+S_dist_plateau <- fread("richness_by_distance_plateau.csv")
+S_dist_rifte <- fread("richness_by_distance_rifte.csv")
+S_dist_plateau[, habitat_code := factor(habitat_code, levels = c('Sed', 'CalPav', 'CrSed', 'CrPav', 'Cr', 'CrCob'))]
+S_dist_rifte[, habitat_code := factor(habitat_code, levels = c('RiftDeb', 'RiftSed', 'RiftHole', 'RiftRock', 'RiftCr'))]
+```
+
+
+
+```{r figure 4, fig.height=5.905, fig.width=3.543}
+g1 <- ggplot(S_dist_rifte, aes(x = dist_habitat, y = Nspp_acum, linetype = habitat_code, color = habitat_code)) +
+  geom_line(size = 0.3) + scale_linetype_manual(values = c('solid', 'dashed', 'dotted', 'solid', 'dashed')) +
+  scale_color_manual(values = c('black', 'black', 'black', 'darkgray', 'darkgray')) + theme_artigo2() +
+  xlab("Observed Distance (m)") + ylab("Richness") + labs(tag = "b", color = "Habitat", linetype = "Habitat") +
+  scale_x_continuous(expand = expansion(mult = c(.01, .03))) + scale_y_continuous(expand = expansion(mult = c(.03, .05)))
+
+g2 <- ggplot(S_dist_plateau, aes(x = dist_habitat, y = Nspp_acum, linetype = habitat_code, color = habitat_code)) +
+  geom_line(size = 0.3) + scale_linetype_manual(values = c('solid', 'dashed', 'dotted', 'solid', 'dashed', 'dotted')) +
+  scale_color_manual(values = c('darkgray', 'black', 'black', 'black', 'gray', 'darkgray')) + theme_artigo2() +
+   xlab(element_blank()) + ylab("Richness") + labs(tag = "a", color = "Habitat", linetype = "Habitat") +
+  scale_x_continuous(expand = expansion(mult = c(.01, .03))) + scale_y_continuous(expand = expansion(mult = c(.02, .05)))
+
+g3 <- ggplot(richness_subset, aes(x = Samples, linetype = variable, y = value, color = variable)) + geom_line(size = 0.3) +
+  theme_artigo2() + xlab("Segments") + ylab("Richness") + labs(tag = "c") +
+  scale_linetype_manual(values = c('solid', 'dashed', 'dotted', 'dashed', 'dotted')) +
+  scale_color_manual(values = c("black", "black", "black", "gray50", "gray50")) +
+  scale_y_continuous(breaks = c(seq(0, 90, 15))) +
+  scale_x_continuous(expand = expansion(mult = c(.02, .03)))
+
+g <- arrangeGrob(g2, g1, g3, nrow = 3)
+if (save_output) ggsave("Figure 4.svg", g, height = 15, width = 9, units = 'cm')
+grid.arrange(g)
+```
+
+
+## rank vs frenquency - Figure 5
+
+```{r}
+rank_frequency <- apply(mc > 0, 2, sum)
+rank_abundance <- apply(mc, 2, sum)
+rank <- data.frame(species = names(rank_frequency), frequency = unname(rank_frequency),
+                            abundance = unname(rank_abundance))
+rank <- rank[order(-rank$frequency), ]
+rank$index <- 1:nrow(rank)
+```
+
+Note that labels must be moved afterwards
+```{r figure 5, fig.height=1.968, fig.width=3.543}
+g1 <- ggplot(rank, aes(x = index, y = frequency)) + geom_line(size = 0.3) +
+  geom_point(aes(color = sqrt(abundance)), size = 0.9) +
+  theme_artigo() + theme(legend.position = "none") +
+  geom_text(aes(label = ifelse(abundance > 1000, species, '')), size = font_size, nudge_x = 3) +
+  scale_color_gradientn(colours = gray(4:0/5)) + xlab("Morphotype Rank") + ylab("Frequency") +
+  scale_y_continuous(breaks = seq(0, 120, 30))
+  
+if (save_output) ggsave("Figure 5.svg", g1, height = 5, width = 9, units = 'cm')
+g1
+```
+
+## Table 3
+```{r}
+# compute diversity indices
+envs$Ninds <- apply(mc, 1, sum)
+S <- specnumber(mc)
+H <- diversity(mc)
+J <- H / log(S)
+J[is.na(J)] <- 0
+```
+
+
+```{r}
+envs$Nsponge <- apply(mc[, morphotypes_mc$phylum == "Porifera"], 1, sum) / envs$Ninds * 100
+envs$Ncorals <- apply(mc[, morphotypes_mc$phylum == "Cnidaria"], 1, sum) / envs$Ninds * 100
+```
+
+
+```{r}
+setDT(envs)
+x <- envs[, c("Number of segments" = .N,
+               lapply(.("Abundance" = Ninds, "Average Richness (S)" = S), mean_sd1),
+               "Total Richness" = 0,
+               lapply(.("Shannon index (H')" = H, "Pielou's Evenness (J)" = J), mean_sd2),
+               lapply(.("VMEs Sponges" = Nsponge, "VMEs Corals" = Ncorals), mean_sd3)
+             ),
+         by = .(cluster)]
+setorder(x, cluster)
+x$"Total Richness" <- specnumber(mc, envs$cluster)
+
+if (save_output) write.csv(t(x), "table 3.csv", quote = FALSE)
+t(x)
+```
+
+
+## PERMANOVA
+
+### test for homegenity of dispersion
+```{r}
+mod.hc <- betadisper(spe.bc, envs$habitat_code)
+permutest(mod.hc, permutations = t(perm))
+```
+
+```{r}
+mod.region <- betadisper(spe.bc, envs$region)
+permutest(mod.region, permutations = t(perm))
+```
+
+
+```{r adonis2}
+envs_selected <- envs[, c(10, 6, 11:17, 19, 21, 22)]
+fit <- adonis2(mc.log ~ ., data = envs_selected, method = "bray", by = "terms",
+               permutations = t(perm))
+
+# write.csv(round(as.data.frame(fit), 3), "permanova.csv", quote = FALSE, na = "")
+fit
+```
+
+
+## Ordination Plot - Figure 8
+
+### depth test for each clust
+```{r}
+kruskal.test(depth ~ cluster, data = envs)
+```
+
+```{r}
+pair_test_depth <- pairwise.wilcox.test(envs$depth, envs$cluster, p.adjust.method = "holm")
+pair_test_depth
+```
+
+### slope test for each clust
+```{r}
+kruskal.test(slope ~ cluster, data = envs)
+```
+
+
+```{r}
+pair_test_slope <- pairwise.wilcox.test(envs$slope, envs$cluster, p.adjust.method = "holm")
+pair_test_slope
+```
+
+
+
+get letters to plot above box-plot
+```{r}
+label1 <- multcompLetters(tri.to.squ(pair_test_depth$p.value),
+                compare = "<", threshold = 0.05,
+                Letters = letters, reversed = FALSE)$Letters
+
+label2 <- multcompLetters(tri.to.squ(pair_test_slope$p.value),
+                compare = "<", threshold = 0.05,
+                Letters = letters, reversed = FALSE)$Letters
+
+
+label1[1] <- ""; label2[1] <- ""
+labels <- c(label1, label2)
+vars_c <- c("depth", "slope")
+
+envs_melt_c <- melt(as.data.table(envs), id.vars = c("cluster"), measure.vars = vars_c)
+envs_melt_c[, variable := factor(variable, levels = vars_c)]
+
+tmp <- data.table(cluster = factor(rep(LETTERS[1:k], 2)),
+                 variable = factor(rep(vars_c, each = k), levels = vars_c),
+                 label = labels)
+```
+
+
+### NMDS
+```{r}
+set.seed(12345)
+NMDS <- metaMDS(mc.log, k = 2, autotransform = FALSE, distance = "bray")
+```
+
+```{r}
+data.scores <- as.data.table(scores(NMDS))
+data.scores$site <- rownames(data.scores)
+data.scores$Cluster <- envs$cluster
+data.scores$Habitat <- envs$habitat_code
+data.scores$Substrate <- envs$Substrate
+data.scores$Region <- envs$region
+
+cent_habitat <- aggregate(cbind(NMDS1, NMDS2) ~ Habitat, data = data.scores, FUN = mean)
+cent_region <- aggregate(cbind(NMDS1, NMDS2) ~ Region, data = data.scores, FUN = mean)
+cent_subsrate <- aggregate(cbind(NMDS1, NMDS2) ~ Substrate, data = data.scores, FUN = mean)
+
+cent_habitat <- setNames(cent_habitat, c('Habitat', 'hNMDS1', 'hNMDS2'))
+cent_region <- setNames(cent_region, c('Region', 'rNMDS1', 'rNMDS2'))
+cent_subsrate <- setNames(cent_subsrate, c('Substrate', 'sNMDS1', 'sNMDS2'))
+         
+data.scores <- merge(data.scores, cent_habitat, by = 'Habitat', sort = FALSE)
+data.scores <- merge(data.scores, cent_region, by = 'Region', sort = FALSE)
+data.scores <- merge(data.scores, cent_subsrate, by = 'Substrate', sort = FALSE)
+
+tmp2 <- data.frame(label = c("AAIW", "UCDW"),
+                   cluster = c("F", "F"),
+                   y = c(-1060, -1140))
+```
+
+```{r figure 8, message=FALSE, warning=FALSE, fig.height=7.086, fig.width=5.511}
+g1 <- ggplot(data.scores, aes(x = NMDS1, y = NMDS2, color = Cluster)) +
+  geom_point(size = 1.5) + stat_ellipse(type = "norm", level = 0.95) +
+  scale_color_manual(values = col_vec) +
+  coord_fixed() + theme_artigo() + labs(tag = "a") +
+  annotate("text", x = -Inf, y = -Inf, hjust = -0.05, vjust = -0.65, label = sprintf("Stress = %.3f", NMDS$stress), size = 3) +
+  theme(panel.border = element_rect(colour = "black", fill = NA),
+        legend.key.height = unit(4, 'mm'), legend.key.width = unit(5, 'mm'),
+        legend.text = element_text(margin = margin(l = -0.5, unit = 'mm')))
+
+g2 <- ggplot(data.scores, aes(x = NMDS1, y = NMDS2, color = Habitat)) +
+  geom_point(size = 1) +
+  geom_segment(aes(xend = hNMDS1, yend = hNMDS2)) +
+  scale_color_brewer(palette = "Paired") +
+  scale_x_continuous(expand = expansion(c(0.062, 0.062))) +
+  coord_fixed() + theme_artigo() + labs(tag = "b") +
+  annotate("text", x = -Inf, y = -Inf, hjust = -0.1, vjust = -0.65, label = "bold(Habitat)", parse = TRUE, size = 3) +
+  theme(panel.border = element_rect(colour = "black", fill = NA),
+        legend.key.height = unit(3, 'mm'), legend.key.width = unit(4, 'mm'),
+        legend.text = element_text(margin = margin(r = 1, l = -1, unit = "mm"), hjust = 0),
+        legend.position = "top", legend.box.margin = margin(t = 0, b = -2, unit = "mm"),
+        legend.background = element_blank(), legend.title = element_blank(),
+        plot.margin = margin(t = -2, b = 3, l = 2.2, unit = 'mm'))
+
+
+g3 <- ggplot(data.scores, aes(x = NMDS1, y = NMDS2, color = Region)) +
+  geom_point(size = 1) +
+  geom_segment(aes(xend = rNMDS1, yend = rNMDS2)) +
+  scale_color_brewer(palette = "Dark2") +
+  scale_x_continuous(expand = expansion(c(0.062, 0.062))) +
+  coord_fixed() + theme_artigo() + labs(tag = "c") +
+  annotate("text", x = -Inf, y = -Inf, hjust = -0.1, vjust = -0.35, label = "bold(Region)", parse = TRUE, size = 3) +
+  theme(panel.border = element_rect(colour = "black", fill = NA),
+        legend.key.height = unit(3, 'mm'), legend.key.width = unit(4, 'mm'),
+        legend.text = element_text(margin = margin(r = 2, l = -1, unit = "mm"), hjust = 0),
+        legend.position = "top", legend.box.margin = margin(t = 2.9, b = -2, unit = "mm"),
+        legend.background = element_blank(), legend.title = element_blank(),
+        plot.margin = margin(t = -2, b = 3, l = -1, unit = 'mm'))
+
+
+
+g4 <- ggplot(envs_melt_c[variable == "depth"], aes(x = cluster, y = value, fill = cluster)) +
+  geom_violin(scale = "width") +
+  stat_summary(fun = 'median', aes(ymax = ..y.., ymin = ..y..), geom = 'errorbar',
+               size = 0.5, width = 0.5, col = 'black') +
+  theme_artigo() +
+  scale_fill_manual(values = col_vec) +
+  xlab("Cluster") + ylab("Depth (m)") + labs(tag = "d") +
+  theme(legend.position = "none",
+        panel.grid.major.y = element_line(color = 'gray80')) +
+  scale_y_continuous(label = abs, expand	= expansion(c(0.05, 0.1))) +
+  geom_text(aes(x = cluster, y = Inf, label = label), data = tmp[variable == "depth"], size = font_size, vjust = 1, inherit.aes = FALSE) +
+  geom_hline(aes(yintercept = -1100), linetype = "dashed") +
+  geom_text(aes(x = cluster, y = y, label = label), data = tmp2, size = font_size, inherit.aes = FALSE)
+
+
+g5 <- ggplot(envs_melt_c[variable == "slope"], aes(x = cluster, y = value, fill = cluster)) +
+  geom_violin(scale = "width") +
+  stat_summary(fun = 'median', aes(ymax = ..y.., ymin = ..y..), geom = 'errorbar',
+               size = 0.5, width = 0.5, col = 'black') +
+  theme_artigo() +
+  scale_fill_manual(values = col_vec) +
+  xlab("Cluster") + ylab("Slope (degrees)") + labs(tag = "e") +
+  theme(legend.position = "none",
+        panel.grid.major.y = element_line(color = 'gray80')) +
+        scale_y_continuous(expand	= expansion(c(0.05, 0.1))) +
+  geom_text(aes(x = cluster, y = Inf, label = label), data = tmp[variable == "slope"], size = font_size, vjust = 1, inherit.aes = FALSE)
+
+
+g23 <- arrangeGrob(g2, g3, ncol = 2)
+g45 <- arrangeGrob(g4, g5, ncol = 2)
+g <- arrangeGrob(g1, g23, g45, nrow = 3, heights = c(0.34, 0.36, 0.29))
+if (save_output) ggsave("Figure 8.svg", g, height = 18, width = 14, units = 'cm')
+grid.arrange(g)
+```
+
+
+# MVPART
+```{r, message=FALSE, results=FALSE}
+envs_selected <- envs[, c(10, 6, 11, 12)] #c(10,6,11:17,19,21,22)
+envs_selected[, depth := depth * -1] # easier to interpret latter on
+
+spe.hell <- decostand(mc, "hellinger")
+mvfit <- mvpart(as.matrix(spe.hell) ~ ., data = envs_selected,
+                  xv = "pick", xvmult = 100, method = "mrt", plot.add = FALSE)
+```
+
+Here I used a tree size of 7 instead of 8, as it is closer to the "Min + 1SE" threshold (red line) and there is a much larger difference between sizes 6 and 7, than sizes 7 and 8.
+
+
+```{r mvpart}
+size <- 7
+
+cpp <- mvfit$cptable[mvfit$cptable[, 2] == (size - 1), 1]
+mvfit <- prune(mvfit, cpp)
+
+cat("\nRelative error: ", round(mvfit$cptable[size, 3], 3))
+cat("\nCV error: ", round(mvfit$cptable[size, 4], 3))
+cat("\nCV SE: ", round(mvfit$cptable[size, 5], 4))
+cat("\nExplained variance: ", round((1 - mvfit$cptable[size, 3]) * 100, 1), "%")
+```
+
+
+```{r figure 9 prep}
+heigth_hist <- 0.05 # height of leaves barplots
+ylim <- 0.35 # minimal mean to plot numbers next to the bar
+
+
+mvplot <- dendro_data_mvpart(mvfit, format_labels)
+
+col_vec.gray <- rep(c('grey70', 'grey45', 'grey20'), length.out = length(unique(mvplot$bars$morph)))
+
+glabels <- as.data.table(mvplot$bars)
+glabels <- glabels[value >= ylim]
+setorder(glabels, where)
+glabels[, label := as.numeric(factor(variable, unique(variable)))]
+```
+
+```{r figure 9, fig.height=3.5433, fig.width=5.5118}
+g <- ggplot() +
+  geom_segment(data = mvplot$segments, aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_void() + theme(text = element_text(size = 7)) +
+  geom_richtext(data = mvplot$labels.left, aes(x = x, y = y, label = label), vjust = 0, hjust = 1,
+            fill = NA, label.color = NA, size = font_size) +
+  geom_richtext(data = mvplot$labels.right, aes(x = x, y = y, label = label), vjust = 0, hjust = 0,
+            fill = NA, label.color = NA, size = font_size) +
+  geom_text(data = mvplot$leaves, aes(x = x, y = y - heigth_hist - 0.005, label = label), vjust = 1, hjust = 0.5,
+            size = font_size) +
+  theme(plot.margin = unit(c(0, 6, 1, 6), "mm")) + coord_cartesian(clip = "off")
+
+# plot barplot n each leaf
+for (leaf in 1:nrow(mvplot$leaves)) {
+  sub <- mvplot$leaves[leaf, ]
+  temp <- subset(mvplot$bars, where ==  sub$where)
+  templ <- subset(glabels, where ==  sub$where)
+  gtmp <- ggplot(temp, aes(x = variable, y = value)) + geom_bar(stat = "identity", fill = "black") +
+    geom_text(data = templ, aes(x = variable, y = value, label = label), size = font_size, hjust = 1.2) +
+    scale_y_continuous(limits = c(0, 1)) +
+    theme_void() + theme(axis.line.x = element_line(color = "gray30"), legend.position = "none")
+
+  g <- g + annotation_custom(grob = ggplotGrob(gtmp), xmin = sub$x - 0.4, xmax = sub$x + 0.4,
+                             ymin = sub$y - heigth_hist, ymax = sub$y)
+}
+
+if (save_output) ggsave("Figure 9.svg", g, height = 9, width = 14, units = 'cm')
+g
+```
+
+Text for the legend:
+```{r}
+temp <- glabels[unique(morphotypes_mc[, c('code', 'taxonName')]), on = c(variable = "code"), nomatch = NULL]
+temp <- unique(temp[, .(label, variable, taxonName)])
+setorder(temp, label)
+paste(paste0(temp$label, " - ", temp$taxonName, " (", temp$variable, ")"), collapse = ", ")
+```
+
+
