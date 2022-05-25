@@ -54,7 +54,7 @@ merge_annotation <- function(annotations, morphotypes, locations) {
                 .(phylum, class, order, group, code, taxonName, zone), on = .(morphotype)]
 
   # remove unwanted annotations
-  annotations <- annotations[group != 'ignorar' & zone == 'bï¿½ntico']
+  annotations <- annotations[group != 'ignorar' & zone == 'bêntico']
   annotations$zone <- NULL
 
 

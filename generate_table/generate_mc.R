@@ -103,9 +103,10 @@ envs_f <- annotations[, lapply(.SD, first), by = .(sample), .SDcols = c(1, 2, 12
 envs_f <- envs_f[tmp2, .SD, on = .(sample)]
 envs <- cbind(envs_f, envs)
 
-setcolorder(envs, c("sample", "station", "time", "lon", "lat"))
+# add segment distance in the envs table
+envs[tmp, dists := dists, on = .(sample)]
 
-
+setcolorder(envs, c("sample", "station", "time", "lon", "lat", "dists"))
 
 
 #### add CTD measurements ####

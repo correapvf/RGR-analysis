@@ -22,7 +22,7 @@ library(mvpart)
 source("functions.R")
 
 save_output <- FALSE # set to TRUE to save plots
-capture.output(sessionInfo(), file = "sessionInfo.txt")
+if (save_output) capture.output(sessionInfo(), file = "sessionInfo.txt")
 ```
 
 
@@ -215,7 +215,8 @@ perm <- replicate(control$nperm, permute_custom(nr, control, selected_stations))
 
 ```{r}
 ival.mult <- multipatt(mc, envs$cluster, func = "indval.g", permutations = perm)
-                        
+
+if (save_output) capture.output(summary(ival.mult), file = "multipatt.txt")                      
 summary(ival.mult)
 ```
 
@@ -263,7 +264,7 @@ if (save_output) ggsave("figure 7 substrates.svg", g, height = 9, width = 14, un
 
 ## Figure 4 - richness vs distance
 ```{r}
-richness <- richness_plot(mc, perm = 999)
+richness <- richness_plot(mc, perm = 1000)
 richness_subset <- subset(richness$pool_spp, !(variable %in% c('Chao2', 'Jack2')))
 
 
