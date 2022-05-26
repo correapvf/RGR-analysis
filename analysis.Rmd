@@ -621,3 +621,11 @@ paste(paste0(temp$label, " - ", temp$taxonName, " (", temp$variable, ")"), colla
 ```
 
 
+Density values of *S. oculata* for discussion
+```{r}
+d <- mc$Scep1 / envs$dists
+d <- d / 5 # 5 m wide area
+max(d)
+sum(d > 0.11)
+```
+
